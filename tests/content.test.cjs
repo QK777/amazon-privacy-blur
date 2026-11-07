@@ -8,6 +8,8 @@ const { pathToFileURL } = require('node:url');
 const assert = require('node:assert/strict');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+const css = fs.readFileSync(path.join(__dirname, '..', 'content.css'), 'utf8');
+assert.equal(css.replace(/\r\n/g, '\n'), require('../scripts/generate-css.cjs').generateCSS(), 'Regenerate content.css after changing automatic fields');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apb-incremental-'));
 const script = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
 const setup = `
@@ -166,6 +168,52 @@ const checks = `
     check(pendingFrame.contentDocument.documentElement.hasAttribute('data-apb-off'),
       'settings event during initial storage read wins over stale initial values');
     pendingFrame.remove();
+    // No registered names and no content script: known fields must be hidden by CSS itself.
+    const autoFrame = document.createElement('iframe');
+    const autoReady = new Promise(resolve => autoFrame.onload = resolve);
+    autoFrame.srcdoc = '<!doctype html><meta charset="utf-8"><style>' + ${JSON.stringify(css)} + '</style>' +
+      '<section class="order-card"><div class="yohtmlc-recipient"><span id="auto-name" style="color:blue">Unregistered Recipient</span></div>' +
+      '<h2 id="auto-product" itemprop="name">Useful Notebook</h2><div id="auto-total">Total: 2,000 yen</div></section>' +
+      '<div class="a-popover-content"><ul class="displayAddressUL"><li class="displayAddressFullName" id="auto-popup-name">Different Recipient</li>' +
+      '<li class="displayAddressAddressLine1" id="auto-street">Example city 9-8-7</li><li id="auto-building">Example Building 402</li></ul></div>' +
+      '<section data-component="shippingAddress"><b id="auto-detail">Other Name</b><p id="auto-detail-street">Another city 4-5-6</p></section>' +
+      '<section data-component="billingAddress"><span id="auto-billing">Billing Name and Address</span></section>' +
+      '<div id="address-book-entry-3-address"><span id="auto-book">Book Address</span></div><button id="auto-edit">Edit address</button>' +
+      '<div class="a-popover-content"><span id="auto-unrelated-popover">Price breakdown</span></div>' +
+      '<input id="auto-input" autocomplete="shipping street-address" value="Input Address">' +
+      '<textarea id="auto-textarea" autocomplete="billing address-line1">Billing input</textarea>' +
+      '<select id="auto-select" autocomplete="shipping address-level1"><option>Test prefecture</option></select>' +
+      '<div id="dynamic-auto"><span id="auto-late-class">Late Recipient</span></div>';
+    document.body.append(autoFrame); await autoReady;
+    const autoDoc=autoFrame.contentDocument, autoWin=autoFrame.contentWindow;
+    const isMasked = id => autoWin.getComputedStyle(autoDoc.getElementById(id)).webkitTextFillColor === 'rgba(0, 0, 0, 0)';
+    check(isMasked('auto-name'), 'order history recipient is hidden without saved names or content JS');
+    check(['auto-popup-name','auto-street','auto-building'].every(isMasked), 'address popover protects name street and building');
+    check(isMasked('auto-detail') && isMasked('auto-detail-street'), 'order details protect full shipping address');
+    check(isMasked('auto-billing'), 'billing address is automatically hidden');
+    check(isMasked('auto-book') && !isMasked('auto-edit'), 'address book value hidden while edit button stays readable');
+    check(!isMasked('auto-product') && !isMasked('auto-total') && !isMasked('auto-unrelated-popover'),
+      'product name price and unrelated popover stay readable');
+    check(['auto-input','auto-textarea','auto-select'].every(isMasked), 'shipping and billing autocomplete tokens mask native form values');
+    const late = autoDoc.createElement('div'); late.className='displayAddressDiv';
+    late.innerHTML='<span id="auto-late-address">New address from popover</span>'; autoDoc.body.append(late);
+    check(isMasked('auto-late-address'), 'new address popover is hidden immediately without an observer');
+    autoDoc.getElementById('dynamic-auto').className='recipient';
+    check(isMasked('auto-late-class'), 'class change hides recipient immediately without traversal');
+    autoDoc.getElementById('dynamic-auto').className='ordinary';
+    check(!isMasked('auto-late-class'), 'removing field class restores nonprivate text');
+    const beforeRect=autoDoc.getElementById('auto-street').getBoundingClientRect().toJSON();
+    let automaticChange;
+    autoWin.chrome={storage:{local:{get(defaults,cb){cb({enabled:false,names:''});}},
+      onChanged:{addListener(cb){automaticChange=cb;}}}};
+    autoWin.eval(extensionSource);
+    check(!isMasked('auto-name') && !isMasked('auto-street') && !isMasked('auto-input'), 'off disables automatic text and native input masking');
+    check(JSON.stringify(autoDoc.getElementById('auto-street').getBoundingClientRect().toJSON()) === JSON.stringify(beforeRect),
+      'automatic masking preserves element position and size');
+    automaticChange({enabled:{newValue:true}}, 'local');
+    check(isMasked('auto-name') && isMasked('auto-street') && isMasked('auto-input'),
+      'reenabling automatically masks addresses with an empty name list');
+    autoFrame.remove();
     const output = document.createElement('pre'); output.id='test-result';
     output.textContent = JSON.stringify({ok:true, checks:results.length, initialVisits, insertionVisits});
     document.body.append(output);
@@ -175,7 +223,7 @@ const checks = `
   });
 `;
 const input = path.join(dir, 'test.html');
-fs.writeFileSync(input, '<!doctype html><meta charset="utf-8"><body>' +
+fs.writeFileSync(input, '<!doctype html><meta charset="utf-8"><style>' + css + '</style><body>' +
   '<div id="name">Sample Person</div><p>〒123-4567 / １２３－４５６７ / A+B</p>' +
   '<div id="glow-ingress-line1">Delivery city</div><textarea>123-4567</textarea>' +
   '<div contenteditable>Sample Person</div><div id="list"></div>' +

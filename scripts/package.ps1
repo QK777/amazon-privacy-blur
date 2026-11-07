@@ -12,9 +12,14 @@ $extensionFiles = @(
     'manifest.json', 'content.js', 'content.css',
     'popup.html', 'popup.js', 'popup.css', '使い方.txt', 'LICENSE'
 )
+$iconFiles = @('icons/icon16.png', 'icons/icon32.png', 'icons/icon48.png', 'icons/icon128.png')
+$extensionFiles += $iconFiles
+$webstoreFiles = @('manifest.json', 'content.js', 'content.css', 'popup.html', 'popup.js', 'popup.css', 'LICENSE') + $iconFiles
 $sourceFiles = $extensionFiles + @(
     'README.md', 'CHANGELOG.md', '.gitignore', '.gitattributes',
-    'scripts/package.ps1', 'tests/content.test.cjs'
+    'PRIVACY.md', 'icons/icon.svg', 'scripts/package.ps1', 'tests/content.test.cjs',
+    'scripts/store-assets.cjs', 'scripts/generate-css.cjs', 'store/listing-ja.md', 'store/submission-guide.md',
+    'store/screenshot-1.png', 'store/screenshot-2.png', 'store/promo-440x280.png'
 )
 
 foreach ($relativePath in $sourceFiles) {
@@ -27,7 +32,7 @@ $outputDirectory = Join-Path $projectRoot 'dist'
 [void][IO.Directory]::CreateDirectory($outputDirectory)
 
 function Write-Package {
-    param([string]$FileName, [string[]]$Files)
+    param([string]$FileName, [string[]]$Files, [string]$Prefix = 'AmazonPrivacyBlur/')
     $destination = Join-Path $outputDirectory $FileName
     # Overwrite only this generated file; no directory copying or recursive deletion.
     $stream = [IO.File]::Open($destination, [IO.FileMode]::Create, [IO.FileAccess]::Write)
@@ -35,7 +40,7 @@ function Write-Package {
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create, $true)
         try {
             foreach ($relativePath in $Files) {
-                $entryName = 'AmazonPrivacyBlur/' + $relativePath.Replace('\', '/')
+                $entryName = $Prefix + $relativePath.Replace('\', '/')
                 [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                     $archive, (Join-Path $projectRoot $relativePath), $entryName,
                     [IO.Compression.CompressionLevel]::Optimal
@@ -50,7 +55,7 @@ function Write-Package {
     try {
         if ($archive.Entries.Count -ne $Files.Count) { throw "Entry count mismatch: $FileName" }
         $expected = @{}
-        foreach ($relativePath in $Files) { $expected['AmazonPrivacyBlur/' + $relativePath.Replace('\', '/')] = $relativePath }
+        foreach ($relativePath in $Files) { $expected[$Prefix + $relativePath.Replace('\', '/')] = $relativePath }
         foreach ($entry in $archive.Entries) {
             if (-not $expected.ContainsKey($entry.FullName)) { throw "Unexpected entry: $($entry.FullName)" }
             $entryStream = $entry.Open()
@@ -78,6 +83,7 @@ function Write-Package {
 $packages = @(
     Write-Package -FileName "AmazonPrivacyBlur-$version.zip" -Files $extensionFiles
     Write-Package -FileName "AmazonPrivacyBlur-source-$version.zip" -Files $sourceFiles
+    Write-Package -FileName "AmazonPrivacyBlur-webstore-$version.zip" -Files $webstoreFiles -Prefix ''
 )
 $checksums = ($packages | ForEach-Object { "$($_.SHA256)  $($_.File)" }) -join "`n"
 [IO.File]::WriteAllText((Join-Path $outputDirectory 'SHA256SUMS.txt'), $checksums + "`n", [Text.UTF8Encoding]::new($false))

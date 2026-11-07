@@ -2,12 +2,13 @@
 <html lang="ja"><head><meta charset="utf-8"><title>Amazon ぼかし</title><link rel="stylesheet" href="popup.css"></head>
 <body>
   <h1>Amazon ぼかし</h1>
-  <label class="switch"><input id="enabled" type="checkbox" checked> 名前・郵便番号をぼかす</label>
-  <p>Amazon.co.jpで動作します。上部のお届け先・アカウント名、対応する住所欄、日本の郵便番号をぼかします。</p>
-  <label for="names">追加で隠す名前（1行に1つ）</label>
+  <label class="switch"><input id="enabled" type="checkbox" checked> 名前・住所をぼかす</label>
+  <p>注文履歴・注文詳細のお届け先、住所帳などの対応する名前・住所欄を、登録なしで自動的にぼかします。</p>
+  <details><summary>その他の文字列も隠す（任意）</summary>
+  <label for="names">補助的に隠す文字列（1行に1つ）</label>
   <textarea id="names" rows="4" placeholder="山田 太郎&#10;山田太郎"></textarea>
-  <p>注文履歴などでも隠したい名前を、画面と同じ表記で登録してください。</p>
-  <button id="save">保存する</button><p id="status" role="status"></p>
+  <p>名前・住所欄の自動ぼかしには設定不要です。欄以外の文字も隠したい場合だけ登録してください。</p>
+  <button id="save">保存する</button></details><p id="status" role="status"></p>
   <small>表示だけを加工します。個人情報の外部送信はありません。共有前に隠れていることを確認してください。</small>
   <script src="popup.js"></script>
 </body></html>
