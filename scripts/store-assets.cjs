@@ -69,7 +69,7 @@ iframe{display:block;border:0;width:100%;height:294px}.label{font-size:16px;marg
 footer{font-size:14px;line-height:1.7;color:#50716a;margin-top:24px}.pill{background:#123d49;color:white;border-radius:20px;padding:8px 16px;display:inline-block;font-size:15px;margin-top:22px}
 `;
 const head = '<!doctype html><html lang="ja"><meta charset="utf-8"><style>' + common + '</style><main>';
-const brand = `<header>${icon}<span>Amazon 名前・住所ぼかし</span></header>`;
+const brand = `<header>${icon}<span>Amazon 名前・住所マスク</span></header>`;
 function fixture(enabled) {
   const markup = `<!doctype html><html lang="ja"><meta charset="utf-8"><style>
   body{margin:0;padding:24px;color:#243d47;font:17px/1.7 "Segoe UI","Yu Gothic UI",sans-serif;background:white}
@@ -85,10 +85,10 @@ function fixture(enabled) {
   return markup + script(mock) + script(source) + '</html>';
 }
 function frame(enabled) { return `<iframe title="${enabled ? 'オン' : 'オフ'}の動作デモ" srcdoc="${escapeHtml(fixture(enabled))}"></iframe>`; }
-render('screenshot-1', head + brand + '<h1>共有する前に、名前をぼかす。</h1>' +
-  '<p>Amazon.co.jpの名前・住所欄を、文字列の登録なしでぼかします。</p><div class="columns">' +
+render('screenshot-1', head + brand + '<h1>共有する前に、名前を隠す。</h1>' +
+  '<p>Amazon.co.jpの名前・住所欄を、登録なしで「*」表示にします。</p><div class="columns">' +
   `<section style="flex:1"><div class="label">OFF ／ 通常の表示</div><div class="panel"><div class="bar"><span>動作デモ</span><span>架空データ</span></div>${frame(false)}</div></section>` +
-  `<section style="flex:1"><div class="label">ON ／ ぼかしを有効にした表示</div><div class="panel"><div class="bar"><span>動作デモ</span><span>架空データ</span></div>${frame(true)}</div></section></div>` +
+  `<section style="flex:1"><div class="label">ON ／ 標準の「*」表示</div><div class="panel"><div class="bar"><span>動作デモ</span><span>架空データ</span></div>${frame(true)}</div></section></div>` +
   '<span class="pill">外部送信なし・設定はブラウザー内に保存</span>' +
   '<footer>架空データを使ったデモ画面です。実際のぼかしコードを使用しています。<br>見た目の加工です。すべての個人情報を隠す保証はありません。共有前に画面を確認してください。</footer></main></html>', 1280, 800);
 
@@ -96,13 +96,13 @@ let popup = read('popup.html').replace('<link rel="stylesheet" href="popup.css">
 popup = popup.replace('<script src="popup.js"></script>', script(`
  window.chrome={storage:{local:{get(defaults,cb){cb({enabled:true,names:''});},set(){return Promise.resolve();}}}};
 `) + script(read('popup.js')));
-render('screenshot-2', head + brand + '<div style="width:650px"><h1 style="margin-top:94px">名前も住所も、<br>登録なし。</h1><p>注文履歴・注文詳細・住所帳の対応欄を自動でぼかします。</p>' +
+render('screenshot-2', head + brand + '<div style="width:650px"><h1 style="margin-top:94px">基本は「*」。<br>ぼかしも選べる。</h1><p>注文履歴・注文詳細・住所帳の対応欄を自動で隠します。</p>' +
   '<div style="margin-top:36px"><div class="eyebrow">シンプルな設定</div>' +
-  '<p style="line-height:2.2;margin-top:10px">インストール後は初期状態から有効<br>住所ポップアップの対応欄も対象<br>オフにするとページの変更監視も停止</p>' +
+  '<p style="line-height:2.2;margin-top:10px">標準は「*」表示、設定でぼかしに変更<br>名前や住所の登録は不要<br>住所入力欄の実データは変更しない</p>' +
   '<span class="pill">外部サービスへの登録は不要</span></div></div>' +
-  '<div class="panel" style="position:absolute;right:56px;top:200px;width:374px">' +
+  '<div class="panel" style="position:absolute;right:56px;top:160px;width:374px">' +
   '<div class="bar">実際の設定画面 ／ 架空データ</div>' +
-  `<iframe style="width:374px;height:360px" title="設定画面" srcdoc="${escapeHtml(popup)}"></iframe></div>` +
+  `<iframe style="width:374px;height:510px" title="設定画面" srcdoc="${escapeHtml(popup)}"></iframe></div>` +
   '<footer style="position:absolute;left:56px;bottom:50px">名前・住所欄をページの構造から判定します。<br>すべての表示を隠す保証はありません。共有前に実際の画面を確認してください。</footer></main></html>', 1280, 800);
 
 render('promo-440x280', `<!doctype html><meta charset="utf-8"><style>

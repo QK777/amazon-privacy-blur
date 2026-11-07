@@ -13,7 +13,7 @@ assert.equal(css.replace(/\r\n/g, '\n'), require('../scripts/generate-css.cjs').
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apb-incremental-'));
 const script = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
 const setup = `
-  let settings = {enabled:true, names:'Sample Person\\nSample Person\\nA+B'};
+  let settings = {enabled:true, mode:'blur', scanPostal:true, names:'Sample Person\\nSample Person\\nA+B'};
   let changeSettings;
   let storageReads = 0, observerCalls = 0, registryWrites = 0;
   const NativeObserver = MutationObserver;
@@ -147,7 +147,7 @@ const checks = `
     const win = frame.contentWindow, doc = frame.contentDocument;
     doc.documentElement.remove();
     let frameChange;
-    win.chrome = {storage:{local:{get(defaults, cb){cb({enabled:false,names:''});}},
+    win.chrome = {storage:{local:{get(defaults, cb){cb({enabled:false,names:'',mode:'blur',scanPostal:true});}},
       onChanged:{addListener(cb){frameChange=cb;}}}};
     win.eval(extensionSource);
     const html = doc.createElement('html');
@@ -204,7 +204,7 @@ const checks = `
     check(!isMasked('auto-late-class'), 'removing field class restores nonprivate text');
     const beforeRect=autoDoc.getElementById('auto-street').getBoundingClientRect().toJSON();
     let automaticChange;
-    autoWin.chrome={storage:{local:{get(defaults,cb){cb({enabled:false,names:''});}},
+    autoWin.chrome={storage:{local:{get(defaults,cb){cb({enabled:false,names:'',mode:'blur'});}},
       onChanged:{addListener(cb){automaticChange=cb;}}}};
     autoWin.eval(extensionSource);
     check(!isMasked('auto-name') && !isMasked('auto-street') && !isMasked('auto-input'), 'off disables automatic text and native input masking');
@@ -214,6 +214,92 @@ const checks = `
     check(isMasked('auto-name') && isMasked('auto-street') && isMasked('auto-input'),
       'reenabling automatically masks addresses with an empty name list');
     autoFrame.remove();
+    const starFrame=document.createElement('iframe');
+    const starReady=new Promise(resolve=>starFrame.onload=resolve);
+    starFrame.srcdoc='<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="font-src &#39;none&#39;"><style>'+
+      ${JSON.stringify(css)}+'</style><form id="star-form"><div class="displayAddressDiv"><span id="star-name">日本 Sample 太郎 🙂</span></div>'+
+      '<input id="star-address" name="address" autocomplete="shipping street-address" value="実際の住所 1-2-3">'+
+      '<textarea name="notes" autocomplete="billing address-line1">Original Building</textarea></form>'+
+      '<p id="star-postal">Ship to 〒123-4567 today</p><h2 id="star-product">Ordinary Notebook</h2>';
+    document.body.append(starFrame);await starReady;
+    const sw=starFrame.contentWindow, sd=starFrame.contentDocument;
+    let starCallbacks=0,starVisits=0;
+    const StarObserver=sw.MutationObserver;
+    sw.MutationObserver=class extends StarObserver{constructor(cb){super(records=>{starCallbacks++;cb(records);});}};
+    const starWalker=sd.createTreeWalker.bind(sd);
+    sd.createTreeWalker=(...args)=>{const walker=starWalker(...args),next=walker.nextNode.bind(walker);
+      walker.nextNode=()=>{const node=next();if(node)starVisits++;return node;};return walker;};
+    const starList=sd.createElement('div');
+    for(let i=0;i<5000;i++){const item=sd.createElement('p');item.textContent='Ordinary description';starList.append(item);}
+    sd.body.append(starList);
+    const NativeFont=sw.FontFace;
+    let fontLoads=0;
+    sw.FontFace=class extends NativeFont {constructor(...args){super(...args);fontLoads++;}};
+    let starChange;
+    sw.chrome={storage:{local:{get(defaults,cb){cb({...defaults,enabled:true,names:'',scanPostal:true});}},
+      onChanged:{addListener(cb){starChange=cb;}}}};
+    const originalBody=sd.body.textContent;
+    const originalForm=JSON.stringify([...new sw.FormData(sd.getElementById('star-form'))]);
+    const originalFamily=sw.getComputedStyle(sd.getElementById('star-name')).fontFamily;
+    const originalInputWidth=sd.getElementById('star-address').getBoundingClientRect().width;
+    sw.eval(extensionSource);
+    await settle();
+    check(sd.documentElement.getAttribute('data-apb-mode')==='stars','missing saved mode defaults to stars');
+    check(fontLoads===0,'star mode loads no fonts even with font-src none');
+    check(sw.getComputedStyle(sd.querySelector('.displayAddressDiv')).backgroundImage.includes('data:image/png')&&
+      sw.getComputedStyle(sd.getElementById('star-address')).backgroundImage.includes('data:image/png'),
+      'automatic name and native input use a star paint pattern');
+    check(sd.body.textContent===originalBody,'star masking preserves original textContent');
+    check(JSON.stringify([...new sw.FormData(sd.getElementById('star-form'))])===originalForm,
+      'star masking preserves submitted address and textarea values');
+    check(sd.querySelector('#star-postal [data-apb-mask]')?.textContent==='〒123-4567'&&
+      !sd.querySelector('#star-product [data-apb-mask]'),'standalone postal match is masked without wrapping product text');
+    check(sw.getComputedStyle(sd.getElementById('star-name')).fontFamily===originalFamily&&
+      sd.getElementById('star-address').getBoundingClientRect().width===originalInputWidth,
+      'star mode preserves original font family and native input width');
+    starVisits=0;
+    const starInsertion=sd.createElement('p');starInsertion.textContent='New 123-4567';starList.append(starInsertion);
+    await settle();const afterInsertion=starCallbacks;await settle();
+    check(starVisits===1&&starCallbacks===afterInsertion&&!!starInsertion.querySelector('[data-apb-mask]'),
+      'star mode visits only the inserted text and never loops on its own wrappers among 5000 items');
+    const maskedText=sd.querySelector('#star-postal [data-apb-mask]').firstChild;
+    maskedText.data='No private data';await settle();
+    check(!sd.querySelector('#star-postal [data-apb-mask]')&&sd.getElementById('star-postal').textContent==='Ship to No private data today',
+      'site text updates clear stale masks and keep the latest text');
+    sd.getElementById('star-postal').textContent='〒987-6543';await settle();
+    check(sd.querySelector('#star-postal [data-apb-mask]')?.textContent==='〒987-6543','new postal text is masked after a site update');
+    starChange({mode:{newValue:'blur'}},'local');await settle();
+    check(sd.documentElement.getAttribute('data-apb-mode')==='blur'&&!sd.querySelector('[data-apb-mask]')&&
+      sw.CSS.highlights.get('apb-private-text').size>0,'switching to blur restores wrappers and uses highlights');
+    starChange({mode:{newValue:'stars'}},'local');await settle();
+    check(!!sd.querySelector('[data-apb-mask]'),'switching back to stars reapplies matches');
+    const currentText=sd.body.textContent;
+    starChange({enabled:{newValue:false}},'local');await settle();
+    check(!sd.querySelector('[data-apb-mask]')&&sd.body.textContent===currentText&&
+      JSON.stringify([...new sw.FormData(sd.getElementById('star-form'))])===originalForm,
+      'off removes masks without restoring stale site text or modifying form data');
+    starFrame.remove();
+    const failureFrame=document.createElement('iframe');document.body.append(failureFrame);
+    const fw=failureFrame.contentWindow,fd=failureFrame.contentDocument;
+    fd.head.innerHTML='<style>'+${JSON.stringify(css)}+'</style>';
+    fd.body.innerHTML='<div class="displayAddressDiv"><span id="fallback-name">Private Person</span></div>';
+    fw.FontFace=class{constructor(){throw Error('Simulated font failure');}};
+    fw.chrome={storage:{local:{get(defaults,cb){cb(defaults);}},onChanged:{addListener(){}}}};
+    fw.eval(extensionSource);await settle();
+    check(fw.getComputedStyle(fd.getElementById('fallback-name')).webkitTextFillColor==='rgba(0, 0, 0, 0)'&&
+      fw.getComputedStyle(fd.querySelector('.displayAddressDiv')).backgroundImage.includes('data:image/png'),
+      'star masking works without font APIs and keeps original text invisible');
+    failureFrame.remove();
+    const earlyFrame=document.createElement('iframe');document.body.append(earlyFrame);
+    const ew=earlyFrame.contentWindow,ed=earlyFrame.contentDocument;ed.documentElement.remove();
+    ew.chrome={storage:{local:{get(defaults,cb){cb(defaults);}},onChanged:{addListener(){}}}};
+    ew.eval(extensionSource);await settle();
+    const earlyHtml=ed.createElement('html');earlyHtml.innerHTML='<body><div class="recipient">Early Person</div></body>';
+    ed.append(earlyHtml);
+    await settle();
+    check(earlyHtml.getAttribute('data-apb-mode')==='stars',
+      'star mode is synchronized when the document root arrives');
+    earlyFrame.remove();
     const output = document.createElement('pre'); output.id='test-result';
     output.textContent = JSON.stringify({ok:true, checks:results.length, initialVisits, insertionVisits});
     document.body.append(output);
@@ -229,7 +315,7 @@ fs.writeFileSync(input, '<!doctype html><meta charset="utf-8"><style>' + css + '
   '<div contenteditable>Sample Person</div><div id="list"></div>' +
   script(setup) + script(source) + script(checks));
 const executable = process.env.APB_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const result = spawnSync(executable, ['--headless', '--disable-gpu', '--no-first-run',
+const result = spawnSync(executable, ['--headless', '--disable-gpu', '--no-first-run', '--enable-logging=stderr',
   `--user-data-dir=${path.join(dir, 'profile')}`, '--dump-dom', '--virtual-time-budget=10000',
   pathToFileURL(input).href], {encoding:'utf8', timeout:30000, maxBuffer:4*1024*1024});
 assert.ifError(result.error);
@@ -237,5 +323,6 @@ assert.equal(result.status, 0, result.stderr);
 const output = result.stdout.match(/<pre id="test-result">([^<]*)<\/pre>/);
 assert.ok(output, 'Browser did not return a test result');
 const report = JSON.parse(output[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+if (!report.ok) fs.writeFileSync(path.join(dir, 'browser.stderr.log'), result.stderr);
 assert.equal(report.ok, true, JSON.stringify(report));
 console.log(JSON.stringify(report, null, 2));

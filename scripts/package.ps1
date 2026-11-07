@@ -17,8 +17,9 @@ $extensionFiles += $iconFiles
 $webstoreFiles = @('manifest.json', 'content.js', 'content.css', 'popup.html', 'popup.js', 'popup.css', 'LICENSE') + $iconFiles
 $sourceFiles = $extensionFiles + @(
     'README.md', 'CHANGELOG.md', '.gitignore', '.gitattributes',
-    'PRIVACY.md', 'icons/icon.svg', 'scripts/package.ps1', 'tests/content.test.cjs',
-    'scripts/store-assets.cjs', 'scripts/generate-css.cjs', 'store/listing-ja.md', 'store/submission-guide.md',
+    'PRIVACY.md', 'icons/icon.svg', 'scripts/package.ps1', 'tests/content.test.cjs', 'tests/memory.test.cjs', 'tests/popup.test.cjs',
+    'tests/layout.test.cjs', 'tests/default-footprint.test.cjs', 'scripts/store-assets.cjs', 'scripts/generate-css.cjs',
+    'store/listing-ja.md', 'store/submission-guide.md',
     'store/screenshot-1.png', 'store/screenshot-2.png', 'store/promo-440x280.png'
 )
 
