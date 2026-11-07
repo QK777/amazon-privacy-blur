@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Amazon 名前・郵便番号ぼかし",
+  "version": "1.0.4",
+  "description": "Amazon.co.jpの名前と郵便番号を画面上でぼかします。",
+  "permissions": ["storage"],
+  "action": {"default_popup": "popup.html", "default_title": "Amazon ぼかし"},
+  "content_scripts": [{
+    "matches": ["https://*.amazon.co.jp/*"],
+    "js": ["content.js"],
+    "css": ["content.css"],
+    "run_at": "document_start",
+    "all_frames": true
+  }]
+}

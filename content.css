@@ -1,0 +1,19 @@
+/* Paint text only: no wrappers, dimensions, or containing-block changes. */
+::highlight(apb-private-text) {
+  color: transparent;
+  text-shadow: 0 0 7px #555;
+}
+
+/* Native input values cannot be targeted by the Highlight API. */
+html:not([data-apb-off]) :is(input, textarea):is(
+  #address-ui-widgets-enterAddressFullName,
+  #address-ui-widgets-enterAddressPostalCode,
+  #address-ui-widgets-enterAddressPostalCodeOne,
+  #address-ui-widgets-enterAddressPostalCodeTwo,
+  #address-ui-widgets-FullName,
+  [autocomplete="name"],
+  [autocomplete="postal-code"]
+) {
+  color: transparent !important;
+  text-shadow: 0 0 7px #555 !important;
+}

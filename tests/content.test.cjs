@@ -1,0 +1,193 @@
+// Real Chromium DOM/Highlight API regression and traversal check.
+// Run: node tests/content.test.cjs
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
+const assert = require('node:assert/strict');
+
+const source = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apb-incremental-'));
+const script = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
+const setup = `
+  let settings = {enabled:true, names:'Sample Person\\nSample Person\\nA+B'};
+  let changeSettings;
+  let storageReads = 0, observerCalls = 0, registryWrites = 0;
+  const NativeObserver = MutationObserver;
+  window.MutationObserver = class extends NativeObserver {
+    constructor(callback) { super(records => { observerCalls++; callback(records); }); }
+  };
+  const register = CSS.highlights.set.bind(CSS.highlights);
+  CSS.highlights.set = (...args) => { registryWrites++; return register(...args); };
+  window.chrome = {storage:{local:{get(defaults, cb){ storageReads++; cb(settings); }},
+    onChanged:{addListener(cb){ changeSettings = cb; }}}};
+  let visits = 0;
+  const createWalker = document.createTreeWalker.bind(document);
+  document.createTreeWalker = (...args) => {
+    const walker = createWalker(...args);
+    const next = walker.nextNode.bind(walker);
+    walker.nextNode = () => { const node = next(); if(node) visits++; return node; };
+    return walker;
+  };
+  const list = document.getElementById('list');
+  for(let i=0;i<5000;i++) {
+    const p = document.createElement('p'); p.textContent = 'Ordinary product description'; list.append(p);
+  }
+`;
+const checks = `
+  const extensionSource = ${JSON.stringify(source)};
+  const results = [];
+  const check = (condition, label) => { if(!condition) throw Error(label); results.push(label); };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const ranges = () => [...(CSS.highlights.get('apb-private-text') || [])];
+  const forNode = node => ranges().filter(r => r.startContainer === node);
+  const update = values => {
+    const changes = Object.fromEntries(Object.entries(values).map(([key,value]) =>
+      [key, {oldValue:settings[key], newValue:value}]));
+    settings = {...settings,...values}; changeSettings(changes, 'local');
+  };
+  (async () => {
+    await settle();
+    check(ranges().length === 5, 'initial names, escaped name, postal codes and private field');
+    const initialVisits = visits;
+    const stable = forNode(document.getElementById('name').firstChild)[0];
+    visits = 0;
+    const p = document.createElement('p'); p.textContent = 'New 123-4567'; list.append(p);
+    await settle();
+    check(forNode(p.firstChild).length === 1, 'new subtree protected');
+    check(visits === 1, 'single insertion visits only one text node');
+    check(forNode(document.getElementById('name').firstChild)[0] === stable, 'unchanged ranges reused');
+    const insertionVisits = visits;
+    check(registryWrites === 1, 'highlight registry is not rewritten for mutations');
+    visits = 0;
+    const ignoredBranch = document.createElement('div');
+    ignoredBranch.setAttribute('contenteditable', 'true');
+    for (let i=0; i<1000; i++) {
+      const item = document.createElement('p'); item.textContent = 'Sample Person 123-4567'; ignoredBranch.append(item);
+    }
+    list.append(ignoredBranch); await settle();
+    check(visits === 0 && forNode(ignoredBranch.firstChild.firstChild).length === 0,
+      'ignored added subtree skips all 1000 text nodes');
+    const ignoredChild = document.createElement('p'); ignoredChild.textContent='Sample Person';
+    ignoredBranch.append(ignoredChild); await settle();
+    check(visits === 0, 'mutation inside ignored ancestor skips traversal');
+    const unchanged = forNode(document.getElementById('name').firstChild)[0];
+    update({names: settings.names}); await settle();
+    check(visits === 0 && forNode(document.getElementById('name').firstChild)[0] === unchanged,
+      'unchanged settings preserve ranges without traversal');
+    p.id = 'irrelevant-id'; await settle();
+    check(visits === 0, 'unrelated id change skips traversal');
+    p.firstChild.data = p.firstChild.data; await settle();
+    check(forNode(p.firstChild)[0]?.toString() === '123-4567', 'identical text assignment restores native ranges');
+    p.firstChild.data = 'No private text'; await settle();
+    check(forNode(p.firstChild).length === 0, 'text edit clears old ranges');
+    p.id = 'glow-ingress-line2'; await settle();
+    check(forNode(p.firstChild)[0]?.toString() === 'No private text', 'id change protects full field');
+    p.setAttribute('contenteditable','true'); await settle();
+    check(forNode(p.firstChild).length === 0, 'editable ancestor clears ranges');
+    p.removeAttribute('contenteditable'); await settle();
+    check(forNode(p.firstChild).length === 1, 'editable removal restores protection');
+    p.removeAttribute('id'); p.setAttribute('autocomplete','name'); await settle();
+    check(forNode(p.firstChild).length === 1, 'autocomplete change protects field');
+    const beforeRemoval = ranges().length;
+    p.remove(); await settle();
+    check(ranges().length === beforeRemoval - 1, 'removed subtree releases ranges');
+    list.append(p); p.firstChild.data = 'Moved text'; list.prepend(p); await settle();
+    check(forNode(p.firstChild).length === 1, 'move and overlapping mutations avoid duplicate ranges');
+    const wrapper = document.createElement('div'); list.append(wrapper); wrapper.append(p); await settle();
+    wrapper.setAttribute('contenteditable','true'); await settle();
+    check(forNode(p.firstChild).length === 0, 'ancestor attribute rescans descendants');
+    wrapper.removeAttribute('contenteditable'); await settle();
+    check(forNode(p.firstChild).length === 1, 'ancestor attribute removal restores descendants');
+    update({enabled:false}); visits=0;
+    const callsWhenDisabled = observerCalls;
+    p.firstChild.data = '123-4567'; await settle();
+    check(ranges().length === 0 && visits === 0 && document.documentElement.hasAttribute('data-apb-off'), 'disabled mode performs no traversal');
+    check(observerCalls === callsWhenDisabled, 'disabled observer receives no mutation callbacks');
+    update({enabled:true, names:'Replacement'}); await settle();
+    check(!document.documentElement.hasAttribute('data-apb-off') && forNode(p.firstChild).length === 1, 'reenabling rescans current DOM');
+    check(forNode(document.getElementById('name').firstChild).length === 0, 'name changes clear previous matches');
+    document.getElementById('name').firstChild.data = 'Replacement'; await settle();
+    check(forNode(document.getElementById('name').firstChild).length === 1, 'updated names detected');
+    visits = 0;
+    ignoredBranch.removeAttribute('contenteditable'); await settle();
+    check(forNode(ignoredBranch.firstChild.firstChild)[0]?.toString() === '123-4567',
+      'previously pruned subtree is protected when editable attribute is removed');
+    check(storageReads === 1, 'settings changes require no additional storage reads');
+    document.getElementById('name').setAttribute('autocomplete', 'name'); await settle();
+    const sameRange = forNode(document.getElementById('name').firstChild)[0];
+    document.getElementById('name').setAttribute('autocomplete', 'postal-code'); await settle();
+    check(forNode(document.getElementById('name').firstChild)[0] === sameRange,
+      'unchanged matching text reuses ranges during attribute rescans');
+    const scriptNode = document.createElement('script'); scriptNode.type='application/json';
+    scriptNode.textContent = '123-4567';
+    const styleNode = document.createElement('style'); styleNode.textContent='/* 123-4567 */';
+    const selectNode = document.createElement('select');
+    selectNode.innerHTML='<option>123-4567</option>';
+    visits = 0;
+    const ignoredContainer = document.createElement('div');
+    ignoredContainer.append(scriptNode, styleNode, selectNode); list.append(ignoredContainer); await settle();
+    check(visits === 0, 'nested script style and select subtrees are pruned');
+    const moving = document.createElement('div'); moving.textContent='123-4567'; list.append(moving); await settle();
+    ignoredBranch.setAttribute('contenteditable', 'true');
+    ignoredBranch.append(moving); await settle();
+    check(forNode(moving.firstChild).length === 0, 'move into newly editable ancestor releases old ranges');
+    list.append(moving); await settle();
+    check(forNode(moving.firstChild)[0]?.toString() === '123-4567', 'move out of ignored ancestor restores protection');
+    const outer = document.createElement('div'), inner = document.createElement('div');
+    inner.textContent='123-4567'; outer.append(inner); list.append(outer); await settle();
+    inner.remove(); outer.append(inner); outer.remove(); await settle();
+    check(forNode(inner.firstChild).length === 0, 'nested removals release all detached ranges');
+
+    // Exercise document_start before <html>, independently of the parent fixture.
+    const frame = document.createElement('iframe'); document.body.append(frame);
+    const win = frame.contentWindow, doc = frame.contentDocument;
+    doc.documentElement.remove();
+    let frameChange;
+    win.chrome = {storage:{local:{get(defaults, cb){cb({enabled:false,names:''});}},
+      onChanged:{addListener(cb){frameChange=cb;}}}};
+    win.eval(extensionSource);
+    const html = doc.createElement('html');
+    html.innerHTML='<body><p>123-4567</p></body>'; doc.append(html); await settle();
+    check(html.hasAttribute('data-apb-off') && !win.CSS.highlights.has('apb-private-text'),
+      'initial disabled state handles document_start before html exists');
+    frameChange({enabled:{newValue:true}}, 'local'); await settle();
+    check(!html.hasAttribute('data-apb-off') && [...win.CSS.highlights.get('apb-private-text')][0]?.toString() === '123-4567',
+      'early disabled document can be enabled normally');
+    frame.remove();
+    const pendingFrame = document.createElement('iframe'); document.body.append(pendingFrame);
+    let finishRead, pendingChange;
+    pendingFrame.contentWindow.chrome = {storage:{local:{get(defaults,cb){finishRead=cb;}},
+      onChanged:{addListener(cb){pendingChange=cb;}}}};
+    pendingFrame.contentWindow.eval(extensionSource);
+    pendingChange({enabled:{newValue:false}}, 'local');
+    finishRead({enabled:true,names:''}); await settle();
+    check(pendingFrame.contentDocument.documentElement.hasAttribute('data-apb-off'),
+      'settings event during initial storage read wins over stale initial values');
+    pendingFrame.remove();
+    const output = document.createElement('pre'); output.id='test-result';
+    output.textContent = JSON.stringify({ok:true, checks:results.length, initialVisits, insertionVisits});
+    document.body.append(output);
+  })().catch(error => {
+    const output=document.createElement('pre'); output.id='test-result';
+    output.textContent=JSON.stringify({ok:false,error:error.message,results}); document.body.append(output);
+  });
+`;
+const input = path.join(dir, 'test.html');
+fs.writeFileSync(input, '<!doctype html><meta charset="utf-8"><body>' +
+  '<div id="name">Sample Person</div><p>〒123-4567 / １２３－４５６７ / A+B</p>' +
+  '<div id="glow-ingress-line1">Delivery city</div><textarea>123-4567</textarea>' +
+  '<div contenteditable>Sample Person</div><div id="list"></div>' +
+  script(setup) + script(source) + script(checks));
+const executable = process.env.APB_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const result = spawnSync(executable, ['--headless', '--disable-gpu', '--no-first-run',
+  `--user-data-dir=${path.join(dir, 'profile')}`, '--dump-dom', '--virtual-time-budget=10000',
+  pathToFileURL(input).href], {encoding:'utf8', timeout:30000, maxBuffer:4*1024*1024});
+assert.ifError(result.error);
+assert.equal(result.status, 0, result.stderr);
+const output = result.stdout.match(/<pre id="test-result">([^<]*)<\/pre>/);
+assert.ok(output, 'Browser did not return a test result');
+const report = JSON.parse(output[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+assert.equal(report.ok, true, JSON.stringify(report));
+console.log(JSON.stringify(report, null, 2));
